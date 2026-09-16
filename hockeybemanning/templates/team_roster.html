@@ -1,0 +1,35 @@
+{% extends 'base.html' %}
+
+{% block content %}
+  <h1>{{ team.name }} roster</h1>
+
+  <p><a href="{{ url_for('team_page', team_id=team.id) }}">Back to team</a></p>
+
+  <h2>Assign players to team</h2>
+  <form method="post" class="selection-form">
+    <fieldset class="selection-grid">
+      <legend>Players in {{ team.name }}</legend>
+      {% for player in all_players %}
+        {% set stats = team_player_stats.get(player.player_id, {}) %}
+        <label class="selection-row roster-player-row">
+          <input type="checkbox" name="team_player_ids" value="{{ player.player_id }}" {% if player.player_id in assigned_player_ids %}checked{% endif %} />
+          <div class="roster-player-content">
+            <div class="roster-player-name">
+              {{ player.name }}{% if player.ovr %} (OVR){% endif %}{% if player.cafe %} (Café){% endif %}
+            </div>
+            <div class="roster-player-stats">
+              Off ice: {{ stats.off_ice_count|default(0) }} |
+              Café: {{ stats.cafe_count|default(0) }} |
+              Official: {{ stats.official_count|default(0) }} |
+              Selected: {{ stats.selected_count|default(0) }} |
+              Not selected: {{ stats.not_selected_count|default(0) }}
+            </div>
+          </div>
+        </label>
+      {% else %}
+        <p>No players in the shared roster yet.</p>
+      {% endfor %}
+    </fieldset>
+    <button type="submit">Save team roster</button>
+  </form>
+{% endblock %}

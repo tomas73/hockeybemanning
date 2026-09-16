@@ -1,0 +1,14 @@
+{% extends 'base.html' %}
+
+{% block content %}
+  <h1>History</h1>
+  <div class="list-grid">
+    {% for event in events %}
+      <div class="list-row">
+        <a href="{{ url_for('event_page', event_id=event.id) }}">{{ event.name }}</a>
+      </div>
+    {% else %}
+      <div class="list-row empty-row">No assignments recorded yet.</div>
+    {% endfor %}
+  </div>
+{% endblock %}

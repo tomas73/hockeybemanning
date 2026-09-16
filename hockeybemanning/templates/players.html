@@ -1,0 +1,51 @@
+{% extends 'base.html' %}
+
+{% block content %}
+  <h1>Players</h1>
+
+  <section>
+    <h2>Add player</h2>
+    <form method="post" action="{{ url_for('create_player') }}" class="add-player-form">
+      <input type="text" name="name" placeholder="Player name" required />
+      <label class="inline-check">
+        <input type="checkbox" name="ovr" />
+        <span>OVR</span>
+      </label>
+      <label class="inline-check">
+        <input type="checkbox" name="cafe" />
+        <span>Café</span>
+      </label>
+      <button type="submit">Add</button>
+    </form>
+  </section>
+
+  <section>
+    <h2>Player list</h2>
+    {% if players %}
+      <div class="player-table">
+        {% for player in players %}
+          <div class="player-row">
+            <div class="player-name">{{ player.name }}{% if player.ovr %} (OVR){% endif %}{% if player.cafe %} (Café){% endif %}</div>
+            <form method="post" action="{{ url_for('update_player', player_id=player.player_id) }}" class="player-form">
+              <input type="text" name="name" value="{{ player.name }}" required />
+              <label class="inline-check">
+                <input type="checkbox" name="ovr" {% if player.ovr %}checked{% endif %} />
+                <span>OVR</span>
+              </label>
+              <label class="inline-check">
+                <input type="checkbox" name="cafe" {% if player.cafe %}checked{% endif %} />
+                <span>Café</span>
+              </label>
+              <button type="submit">Save</button>
+            </form>
+            <form method="post" action="{{ url_for('delete_player', player_id=player.player_id) }}" class="delete-form">
+              <button type="submit">Delete</button>
+            </form>
+          </div>
+        {% endfor %}
+      </div>
+    {% else %}
+      <p>No players yet.</p>
+    {% endif %}
+  </section>
+{% endblock %}

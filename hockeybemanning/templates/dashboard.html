@@ -1,0 +1,29 @@
+{% extends 'base.html' %}
+
+{% block content %}
+  <h1>Dashboard</h1>
+
+  <section>
+    <h2>Teams</h2>
+    <div class="list-grid">
+      {% for team in teams %}
+        <div class="list-row">
+          <a href="{{ url_for('team_page', team_id=team.id) }}">{{ team.name }}</a>
+        </div>
+      {% else %}
+        <div class="list-row empty-row">No teams yet.</div>
+      {% endfor %}
+    </div>
+  </section>
+
+  <section>
+    <h2>Create team</h2>
+    <form method="post" action="{{ url_for('create_team') }}">
+      <label>
+        Team name
+        <input type="text" name="name" required />
+      </label>
+      <button type="submit">Create team</button>
+    </form>
+  </section>
+{% endblock %}

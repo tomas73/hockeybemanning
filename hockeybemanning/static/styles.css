@@ -1,0 +1,195 @@
+body {
+  font-family: Arial, sans-serif;
+  margin: 2rem;
+}
+
+nav {
+  display: flex;
+  gap: 1rem;
+  margin-bottom: 1.5rem;
+}
+
+form {
+  display: grid;
+  gap: 0.75rem;
+  max-width: 40rem;
+}
+
+label {
+  display: grid;
+  gap: 0.25rem;
+}
+
+button {
+  width: fit-content;
+}
+
+section {
+  margin-bottom: 2rem;
+}
+
+.selection-form {
+  max-width: 52rem;
+}
+
+.selection-grid {
+  display: grid;
+  gap: 0.5rem;
+  padding: 1rem;
+}
+
+.selection-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  min-height: 2.5rem;
+  padding: 0.35rem 0.5rem;
+  border: 1px solid #ddd;
+  border-radius: 0.5rem;
+  background: #fafafa;
+}
+
+.selection-label {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  margin: 0;
+  cursor: pointer;
+}
+
+.selection-label input {
+  margin: 0;
+}
+
+.player-option {
+  display: grid;
+  grid-template-columns: minmax(0, 1.8fr) minmax(130px, 0.8fr);
+  align-items: center;
+}
+
+.official-option {
+  justify-self: end;
+}
+
+.add-player-form {
+  display: grid;
+  grid-template-columns: minmax(200px, 1fr) auto auto;
+  gap: 0.75rem;
+  align-items: center;
+  max-width: 32rem;
+  margin: 0;
+}
+
+.player-table {
+  display: grid;
+  gap: 0.75rem;
+  max-width: 60rem;
+}
+
+.player-row {
+  display: grid;
+  grid-template-columns: minmax(150px, 220px) minmax(280px, 1fr) auto;
+  gap: 1rem;
+  align-items: center;
+  padding: 0.75rem 1rem;
+  border: 1px solid #ddd;
+  border-radius: 0.5rem;
+  background: #fafafa;
+}
+
+.player-name {
+  font-weight: 600;
+}
+
+.player-form {
+  display: grid;
+  grid-template-columns: minmax(180px, 1fr) auto auto;
+  gap: 0.75rem;
+  align-items: center;
+  margin: 0;
+}
+
+.inline-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.45rem;
+  margin: 0;
+}
+
+.inline-check input {
+  margin: 0;
+}
+
+.delete-form {
+  margin: 0;
+}
+
+.list-grid {
+  display: grid;
+  gap: 0.5rem;
+  max-width: 42rem;
+}
+
+.list-row {
+  display: flex;
+  align-items: center;
+  min-height: 2.5rem;
+  padding: 0.5rem 0.75rem;
+  border: 1px solid #ddd;
+  border-radius: 0.5rem;
+  background: #fafafa;
+}
+
+.roster-player-row {
+  display: grid;
+  gap: 0.3rem;
+  align-items: start;
+}
+
+.roster-player-content {
+  display: grid;
+  gap: 0.25rem;
+  width: 100%;
+}
+
+.roster-player-name {
+  font-weight: 700;
+  font-size: 1rem;
+}
+
+.roster-player-stats {
+  font-size: 0.82rem;
+  color: #444;
+}
+
+.list-row a {
+  color: #0b3d91;
+  text-decoration: none;
+}
+
+.list-row a:hover {
+  text-decoration: underline;
+}
+
+.empty-row {
+  color: #555;
+}
+
+@media (max-width: 640px) {
+  .player-row {
+    grid-template-columns: 1fr;
+  }
+
+  .player-form {
+    grid-template-columns: 1fr;
+  }
+
+  .player-option {
+    grid-template-columns: 1fr;
+  }
+
+  .official-option {
+    justify-self: start;
+  }
+}

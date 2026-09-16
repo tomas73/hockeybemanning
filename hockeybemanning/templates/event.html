@@ -1,0 +1,47 @@
+{% extends 'base.html' %}
+
+{% block content %}
+  <h1>{{ event.name }}</h1>
+
+  <p><a href="{{ url_for('team_page', team_id=event.team_id) }}">Back to team</a></p>
+
+  <form method="post" class="selection-form">
+    <fieldset class="selection-grid">
+      <legend>Select players</legend>
+      {% for player in players %}
+        <div class="selection-row player-option">
+          <label class="selection-label">
+            <input type="checkbox" name="player_ids" value="{{ player.player_id }}" {% if player.player_id in selected_players | map(attribute='player_id') %}checked{% endif %} />
+            <span>{{ player.name }}{% if player.ovr %} (OVR){% endif %}{% if player.cafe %} (Café){% endif %}</span>
+          </label>
+          <label class="selection-label official-option">
+            <input type="checkbox" name="official_ids" value="{{ player.player_id }}" {% if player.player_id in selected_official_ids %}checked{% endif %} />
+            <span>Official</span>
+          </label>
+        </div>
+      {% endfor %}
+    </fieldset>
+
+    {% if selected_players %}
+      <h2>Assignments</h2>
+      <div>
+        <h3>Sekretariat</h3>
+        {% for assignment in assignments['off_ice'] %}
+          <div>{{ assignment.player_name }} {% if assignment.is_manual %}(manual){% endif %}</div>
+        {% else %}
+          <div>Inga sekretariatuppdrag.</div>
+        {% endfor %}
+      </div>
+      <div>
+        <h3>Kiosk</h3>
+        {% for assignment in assignments['cafe'] %}
+          <div>{{ assignment.player_name }} {% if assignment.is_manual %}(manual){% endif %}</div>
+        {% else %}
+          <div>Inga kioskuppdrag.</div>
+        {% endfor %}
+      </div>
+    {% endif %}
+
+    <button type="submit" name="action" value="assign">Assign fairly</button>
+  </form>
+{% endblock %}
