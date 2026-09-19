@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import random
 import sqlite3
 import threading
 from dataclasses import dataclass
@@ -114,7 +115,14 @@ class HockeySchedulingApp:
     def team_player_stats(self, team_id: int) -> list[dict[str, int | str]]:
         self._require_team(team_id)
         total_events = self.connection.execute(
-            "SELECT COUNT(*) AS total_events FROM events WHERE team_id = ?",
+            """
+            SELECT COUNT(*) AS total_events
+            FROM events
+            WHERE team_id = ?
+              AND EXISTS (
+                  SELECT 1 FROM assignments WHERE assignments.event_id = events.id
+              )
+            """,
             (team_id,),
         ).fetchone()["total_events"]
         stats: list[dict[str, int | str]] = []
@@ -140,12 +148,18 @@ class HockeySchedulingApp:
                         FROM event_players
                         JOIN events ON events.id = event_players.event_id
                         WHERE event_players.player_id = ? AND events.team_id = ? AND event_players.official = 1
+                          AND EXISTS (
+                              SELECT 1 FROM assignments WHERE assignments.event_id = events.id
+                          )
                     ) AS official_count,
                     (
                         SELECT COUNT(*)
                         FROM event_players
                         JOIN events ON events.id = event_players.event_id
                         WHERE event_players.player_id = ? AND events.team_id = ?
+                          AND EXISTS (
+                              SELECT 1 FROM assignments WHERE assignments.event_id = events.id
+                          )
                     ) AS selected_count
                 """,
                 (player_id, team_id, player_id, team_id, player_id, team_id, player_id, team_id),
@@ -241,122 +255,94 @@ class HockeySchedulingApp:
         self.connection.commit()
         return self.assign_fairly(event_id)
 
-    def assign_fairly(self, event_id: int) -> dict[str, list[Assignment]]:
+    def preview_assignments(
+        self,
+        event_id: int,
+        *,
+        selected_player_ids: Iterable[int] | None = None,
+        official_ids: Iterable[int] = (),
+        exclude_player_ids: Iterable[int] = (),
+        randomize: bool = False,
+    ) -> dict[str, list[Assignment]]:
+        self._require_event(event_id)
+        event = self._require_event(event_id)
+        player_ids = list(dict.fromkeys(int(player_id) for player_id in (selected_player_ids or ())))
+        if player_ids:
+            official_set = {int(player_id) for player_id in official_ids}
+            selected_players: list[sqlite3.Row] = []
+            for player in self.team_players(event["team_id"]):
+                if int(player["player_id"]) in player_ids:
+                    selected_players.append(
+                        {
+                            "player_id": int(player["player_id"]),
+                            "name": player["name"],
+                            "ovr": bool(player["ovr"]),
+                            "cafe": bool(player["cafe"]),
+                            "official": int(player["player_id"] in official_set),
+                            "team_id": event["team_id"],
+                        }
+                    )
+        else:
+            selected_players = self._selected_players(event_id)
+
+        excluded_player_ids = {int(player_id) for player_id in exclude_player_ids}
+        selected_players = [
+            player
+            for player in selected_players
+            if player["player_id"] not in excluded_player_ids
+        ]
+        if not selected_players:
+            return {ROLE_OFF_ICE: [], ROLE_CAFE: []}
+
+        manual_assignments = self._manual_assignments(event_id)
+        return self._build_assignment_plan(
+            event_id,
+            selected_players,
+            manual_assignments,
+            randomize=randomize,
+            persist=False,
+        )
+
+    def confirm_assignments(self, event_id: int, assignments: dict[str, list[int] | list[Assignment]] | None = None) -> dict[str, list[Assignment]]:
+        self._require_event(event_id)
+        if assignments is None:
+            assignments = self.preview_assignments(event_id)
+
+        normalized: dict[str, list[int]] = {ROLE_OFF_ICE: [], ROLE_CAFE: []}
+        for role in (ROLE_OFF_ICE, ROLE_CAFE):
+            values = assignments.get(role, [])
+            normalized[role] = [
+                int(item.player_id if isinstance(item, Assignment) else item)
+                for item in values
+            ]
+
+        self.connection.execute("DELETE FROM assignments WHERE event_id = ?", (event_id,))
+        self._store_manual_assignments(event_id, normalized)
+        self.connection.commit()
+        return self.assign_fairly(event_id)
+
+    def assign_fairly(self, event_id: int, *, exclude_player_ids: Iterable[int] = (), randomize: bool = False) -> dict[str, list[Assignment]]:
         self._require_event(event_id)
         selected_players = self._selected_players(event_id)
+        excluded_player_ids = {int(player_id) for player_id in exclude_player_ids}
+        selected_players = [
+            player
+            for player in selected_players
+            if player["player_id"] not in excluded_player_ids
+        ]
         if not selected_players:
             raise ValueError("Select players for the event before assigning duties.")
 
         manual_assignments = self._manual_assignments(event_id)
         self._validate_assignments(event_id, manual_assignments)
 
-        self.connection.execute(
-            "DELETE FROM assignments WHERE event_id = ? AND is_manual = 0",
-            (event_id,),
+        assignments = self._build_assignment_plan(
+            event_id,
+            selected_players,
+            manual_assignments,
+            randomize=randomize,
+            persist=True,
         )
-
-        used_player_ids = {assignment["player_id"] for assignment in manual_assignments}
-        remaining_players = [
-            player
-            for player in selected_players
-            if not bool(player["official"]) and player["player_id"] not in used_player_ids
-        ]
-
-        auto_assignments = {ROLE_OFF_ICE: 0, ROLE_CAFE: 0}
-        cafe_players = [player for player in remaining_players if bool(player["cafe"])]
-        for _ in range(min(len(cafe_players), ROLE_LIMITS[ROLE_CAFE])):
-            candidate = self._choose_candidate(event_id, ROLE_CAFE, cafe_players)
-            if candidate is None:
-                break
-            self.connection.execute(
-                "INSERT INTO assignments (event_id, player_id, role, is_manual) VALUES (?, ?, ?, 0)",
-                (event_id, candidate["player_id"], ROLE_CAFE),
-            )
-            used_player_ids.add(candidate["player_id"])
-            auto_assignments[ROLE_CAFE] += 1
-            cafe_players = [
-                player
-                for player in cafe_players
-                if player["player_id"] != candidate["player_id"]
-            ]
-
-        remaining_players = [
-            player
-            for player in remaining_players
-            if player["player_id"] not in used_player_ids
-        ]
-
-        ovr_players = [player for player in remaining_players if bool(player["ovr"]) ]
-        if ovr_players:
-            off_ice_ovr_ids = {assignment["player_id"] for assignment in manual_assignments if assignment["role"] == ROLE_OFF_ICE}
-            if not any(player["player_id"] in off_ice_ovr_ids for player in ovr_players):
-                candidate = self._choose_candidate(event_id, ROLE_OFF_ICE, ovr_players)
-                if candidate is None:
-                    raise ValueError("At least one OVR player must be assigned as an off-ice official.")
-                self.connection.execute(
-                    "INSERT INTO assignments (event_id, player_id, role, is_manual) VALUES (?, ?, ?, 0)",
-                    (event_id, candidate["player_id"], ROLE_OFF_ICE),
-                )
-                used_player_ids.add(candidate["player_id"])
-                auto_assignments[ROLE_OFF_ICE] += 1
-                remaining_players = [
-                    player
-                    for player in remaining_players
-                    if player["player_id"] != candidate["player_id"]
-                ]
-
-        total_open_slots = sum(
-            ROLE_LIMITS[role] - (sum(1 for assignment in manual_assignments if assignment["role"] == role) + auto_assignments.get(role, 0))
-            for role in ROLE_LIMITS
-        )
-        if len(remaining_players) < total_open_slots:
-            priority_roles: list[str] = []
-            while len(priority_roles) < len(remaining_players):
-                off_ice_assigned = sum(1 for role in priority_roles if role == ROLE_OFF_ICE)
-                cafe_assigned = sum(1 for role in priority_roles if role == ROLE_CAFE)
-                if off_ice_assigned < 3:
-                    priority_roles.append(ROLE_OFF_ICE)
-                elif cafe_assigned < 2:
-                    priority_roles.append(ROLE_CAFE)
-                else:
-                    priority_roles.append(ROLE_OFF_ICE)
-
-            for role in priority_roles:
-                candidate = self._choose_candidate(event_id, role, remaining_players)
-                if candidate is None:
-                    break
-                self.connection.execute(
-                    "INSERT INTO assignments (event_id, player_id, role, is_manual) VALUES (?, ?, ?, 0)",
-                    (event_id, candidate["player_id"], role),
-                )
-                remaining_players = [
-                    player
-                    for player in remaining_players
-                    if player["player_id"] != candidate["player_id"]
-                ]
-
-            self.connection.commit()
-            return self.get_event_assignments(event_id)
-
-        for role in ROLE_ORDER:
-            remaining_slots = ROLE_LIMITS[role] - (
-                sum(1 for assignment in manual_assignments if assignment["role"] == role)
-                + auto_assignments.get(role, 0)
-            )
-            for _ in range(remaining_slots):
-                candidate = self._choose_candidate(event_id, role, remaining_players)
-                if candidate is None:
-                    raise ValueError("Not enough players selected to cover cafe and off ice roles.")
-                self.connection.execute(
-                    "INSERT INTO assignments (event_id, player_id, role, is_manual) VALUES (?, ?, ?, 0)",
-                    (event_id, candidate["player_id"], role),
-                )
-                remaining_players = [
-                    player
-                    for player in remaining_players
-                    if player["player_id"] != candidate["player_id"]
-                ]
-
         self.connection.commit()
         return self.get_event_assignments(event_id)
 
@@ -408,6 +394,173 @@ class HockeySchedulingApp:
                     (event_id, player_id, role),
                 )
 
+    def _build_assignment_plan(
+        self,
+        event_id: int,
+        selected_players: list[sqlite3.Row],
+        manual_assignments: list[sqlite3.Row],
+        *,
+        randomize: bool = False,
+        persist: bool = True,
+    ) -> dict[str, list[Assignment]]:
+        used_player_ids = {assignment["player_id"] for assignment in manual_assignments}
+        remaining_players = [
+            player
+            for player in selected_players
+            if not bool(player["official"]) and player["player_id"] not in used_player_ids
+        ]
+
+        auto_assignments = {ROLE_OFF_ICE: 0, ROLE_CAFE: 0}
+        cafe_players = [player for player in remaining_players if bool(player["cafe"])]
+        for _ in range(min(len(cafe_players), ROLE_LIMITS[ROLE_CAFE])):
+            candidate = self._choose_candidate(event_id, ROLE_CAFE, cafe_players, randomize=randomize)
+            if candidate is None:
+                break
+            if persist:
+                self.connection.execute(
+                    "INSERT INTO assignments (event_id, player_id, role, is_manual) VALUES (?, ?, ?, 0)",
+                    (event_id, candidate["player_id"], ROLE_CAFE),
+                )
+            used_player_ids.add(candidate["player_id"])
+            auto_assignments[ROLE_CAFE] += 1
+            cafe_players = [
+                player
+                for player in cafe_players
+                if player["player_id"] != candidate["player_id"]
+            ]
+
+        remaining_players = [
+            player
+            for player in remaining_players
+            if player["player_id"] not in used_player_ids
+        ]
+
+        ovr_players = [player for player in remaining_players if bool(player["ovr"]) ]
+        if ovr_players:
+            off_ice_ovr_ids = {assignment["player_id"] for assignment in manual_assignments if assignment["role"] == ROLE_OFF_ICE}
+            if not any(player["player_id"] in off_ice_ovr_ids for player in ovr_players):
+                candidate = self._choose_candidate(event_id, ROLE_OFF_ICE, ovr_players, randomize=randomize)
+                if candidate is None:
+                    raise ValueError("At least one OVR player must be assigned as an off-ice official.")
+                if persist:
+                    self.connection.execute(
+                        "INSERT INTO assignments (event_id, player_id, role, is_manual) VALUES (?, ?, ?, 0)",
+                        (event_id, candidate["player_id"], ROLE_OFF_ICE),
+                    )
+                used_player_ids.add(candidate["player_id"])
+                auto_assignments[ROLE_OFF_ICE] += 1
+                remaining_players = [
+                    player
+                    for player in remaining_players
+                    if player["player_id"] != candidate["player_id"]
+                ]
+
+        total_open_slots = sum(
+            ROLE_LIMITS[role] - (sum(1 for assignment in manual_assignments if assignment["role"] == role) + auto_assignments.get(role, 0))
+            for role in ROLE_LIMITS
+        )
+        if len(remaining_players) < total_open_slots:
+            priority_roles: list[str] = []
+            while len(priority_roles) < len(remaining_players):
+                off_ice_assigned = sum(1 for role in priority_roles if role == ROLE_OFF_ICE)
+                cafe_assigned = sum(1 for role in priority_roles if role == ROLE_CAFE)
+                if off_ice_assigned < 3:
+                    priority_roles.append(ROLE_OFF_ICE)
+                elif cafe_assigned < 2:
+                    priority_roles.append(ROLE_CAFE)
+                else:
+                    priority_roles.append(ROLE_OFF_ICE)
+
+            for role in priority_roles:
+                candidate = self._choose_candidate(event_id, role, remaining_players, randomize=randomize)
+                if candidate is None:
+                    break
+                if persist:
+                    self.connection.execute(
+                        "INSERT INTO assignments (event_id, player_id, role, is_manual) VALUES (?, ?, ?, 0)",
+                        (event_id, candidate["player_id"], role),
+                    )
+                remaining_players = [
+                    player
+                    for player in remaining_players
+                    if player["player_id"] != candidate["player_id"]
+                ]
+
+            return self._group_assignments_for_preview(event_id, selected_players, manual_assignments, randomize=randomize)
+
+        for role in ROLE_ORDER:
+            remaining_slots = ROLE_LIMITS[role] - (
+                sum(1 for assignment in manual_assignments if assignment["role"] == role)
+                + auto_assignments.get(role, 0)
+            )
+            for _ in range(remaining_slots):
+                candidate = self._choose_candidate(event_id, role, remaining_players, randomize=randomize)
+                if candidate is None:
+                    raise ValueError("Not enough players selected to cover cafe and off ice roles.")
+                if persist:
+                    self.connection.execute(
+                        "INSERT INTO assignments (event_id, player_id, role, is_manual) VALUES (?, ?, ?, 0)",
+                        (event_id, candidate["player_id"], role),
+                    )
+                remaining_players = [
+                    player
+                    for player in remaining_players
+                    if player["player_id"] != candidate["player_id"]
+                ]
+
+        if persist:
+            return self.get_event_assignments(event_id)
+        return self._group_assignments_for_preview(event_id, selected_players, manual_assignments, randomize=randomize)
+
+    def _group_assignments_for_preview(
+        self,
+        event_id: int,
+        selected_players: list[sqlite3.Row],
+        manual_assignments: list[sqlite3.Row],
+        *,
+        randomize: bool = False,
+    ) -> dict[str, list[Assignment]]:
+        grouped = {ROLE_OFF_ICE: [], ROLE_CAFE: []}
+        for assignment in manual_assignments:
+            grouped.setdefault(assignment["role"], []).append(
+                Assignment(
+                    role=assignment["role"],
+                    player_id=int(assignment["player_id"]),
+                    player_name=self._require_player(assignment["player_id"])["name"],
+                    is_manual=True,
+                )
+            )
+
+        used_player_ids = {assignment["player_id"] for assignment in manual_assignments}
+        remaining_players = [
+            player
+            for player in selected_players
+            if not bool(player["official"]) and player["player_id"] not in used_player_ids
+        ]
+
+        for role in ROLE_ORDER:
+            count = ROLE_LIMITS[role] - sum(1 for assignment in manual_assignments if assignment["role"] == role)
+            for _ in range(count):
+                candidate = self._choose_candidate(event_id, role, remaining_players, randomize=randomize)
+                if candidate is None:
+                    break
+                grouped[role].append(
+                    Assignment(
+                        role=role,
+                        player_id=int(candidate["player_id"]),
+                        player_name=candidate["name"],
+                        is_manual=False,
+                    )
+                )
+                used_player_ids.add(candidate["player_id"])
+                remaining_players = [
+                    player
+                    for player in remaining_players
+                    if player["player_id"] != candidate["player_id"]
+                ]
+
+        return grouped
+
     def _validate_assignments(self, event_id: int, assignments: list[sqlite3.Row]) -> None:
         selected_by_id = {player["player_id"]: player for player in self._selected_players(event_id)}
         used_player_ids: set[int] = set()
@@ -425,9 +578,22 @@ class HockeySchedulingApp:
                 raise ValueError("A player can only be assigned to one duty per event.")
             used_player_ids.add(assignment["player_id"])
 
-    def _choose_candidate(self, event_id: int, role: str, players: list[sqlite3.Row]) -> sqlite3.Row | None:
+    def _choose_candidate(
+        self,
+        event_id: int,
+        role: str,
+        players: list[sqlite3.Row],
+        *,
+        randomize: bool = False,
+    ) -> sqlite3.Row | None:
+        if not players:
+            return None
+        if randomize:
+            ranked_players = sorted(players, key=lambda player: self._fairness_score(event_id, role, player))
+            top_candidates = ranked_players[: max(1, min(3, len(ranked_players)))]
+            return random.choice(top_candidates)
         ranked_players = sorted(players, key=lambda player: self._fairness_score(event_id, role, player))
-        return ranked_players[0] if ranked_players else None
+        return ranked_players[0]
 
     def _fairness_score(self, event_id: int, role: str, player: sqlite3.Row) -> tuple[int, int, int, int, int, int]:
         row = self.connection.execute(
@@ -458,19 +624,29 @@ class HockeySchedulingApp:
             LEFT JOIN assignments
                 ON assignments.event_id = event_players.event_id
                AND assignments.player_id = event_players.player_id
+            JOIN events ON events.id = event_players.event_id
             WHERE event_players.player_id = ?
               AND event_players.event_id != ?
+              AND EXISTS (
+                  SELECT 1 FROM assignments WHERE assignments.event_id = event_players.event_id
+              )
               AND assignments.player_id IS NULL
+              AND events.team_id = ?
             """,
-            (player["player_id"], event_id),
+            (player["player_id"], event_id, self._require_event(event_id)["team_id"]),
         ).fetchone()["selected_without_duty_count"]
         official_count = self.connection.execute(
             """
             SELECT COUNT(*) AS official_count
             FROM event_players
+            JOIN events ON events.id = event_players.event_id
             WHERE event_players.player_id = ? AND event_players.official = 1 AND event_players.event_id != ?
+              AND EXISTS (
+                  SELECT 1 FROM assignments WHERE assignments.event_id = event_players.event_id
+              )
+              AND events.team_id = ?
             """,
-            (player["player_id"], event_id),
+            (player["player_id"], event_id, self._require_event(event_id)["team_id"]),
         ).fetchone()["official_count"]
 
         off_ice_count = int(role_history["off_ice_count"])

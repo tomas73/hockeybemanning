@@ -153,26 +153,6 @@ def create_app(db_path: str | None = None) -> Flask:
         if event is None:
             return redirect(url_for("dashboard"))
 
-        if request.method == "POST":
-            try:
-                selected_ids = [int(value) for value in request.form.getlist("player_ids") if value]
-                official_ids = [int(value) for value in request.form.getlist("official_ids") if value]
-                scheduler.select_players_for_event(event_id, selected_ids, official_ids=official_ids)
-                action = request.form.get("action")
-                if action == "assign":
-                    scheduler.assign_fairly(event_id)
-                elif action == "manual":
-                    off_ice_ids = [int(value) for value in request.form.getlist("off_ice") if value]
-                    cafe_ids = [int(value) for value in request.form.getlist("cafe") if value]
-                    scheduler.override_assignments(
-                        event_id,
-                        off_ice_player_ids=off_ice_ids,
-                        cafe_player_ids=cafe_ids,
-                    )
-            except ValueError as exc:
-                flash(str(exc))
-                return redirect(url_for("event_page", event_id=event_id))
-
         team_players = scheduler.team_players(event["team_id"])
         selected_players = scheduler._selected_players(event_id)
         selected_official_ids = {player["player_id"] for player in selected_players if bool(player["official"])}
@@ -181,6 +161,75 @@ def create_app(db_path: str | None = None) -> Flask:
             if selected_players
             else {"off_ice": [], "cafe": []}
         )
+        preview_assignments = None
+        randomize = False
+        exclude_ids: set[int] = set()
+
+        if request.method == "POST":
+            try:
+                selected_ids = [int(value) for value in request.form.getlist("player_ids") if value]
+                official_ids = [int(value) for value in request.form.getlist("official_ids") if value]
+                exclude_ids = {int(value) for value in request.form.getlist("exclude_ids") if value}
+                randomize = request.form.get("randomize") == "on"
+                action = request.form.get("action")
+
+                if action == "confirm":
+                    if not selected_ids:
+                        raise ValueError("Select at least one player before confirming the assignment.")
+                    preview_assignments = scheduler.preview_assignments(
+                        event_id,
+                        selected_player_ids=selected_ids,
+                        official_ids=official_ids,
+                        exclude_player_ids=exclude_ids,
+                        randomize=randomize,
+                    )
+                    scheduler.select_players_for_event(event_id, selected_ids, official_ids=official_ids)
+                    scheduler.confirm_assignments(event_id, assignments=preview_assignments)
+                    return redirect(url_for("event_page", event_id=event_id))
+
+                if action == "assign":
+                    if not selected_ids:
+                        raise ValueError("Select at least one player before assigning duties.")
+                    preview_assignments = scheduler.preview_assignments(
+                        event_id,
+                        selected_player_ids=selected_ids,
+                        official_ids=official_ids,
+                        exclude_player_ids=exclude_ids,
+                        randomize=randomize,
+                    )
+                    selected_players = [
+                        player
+                        for player in team_players
+                        if int(player["player_id"]) in selected_ids
+                    ]
+                    selected_official_ids = set(official_ids)
+                    assignments = preview_assignments
+                    return render_template(
+                        "event.html",
+                        event=event,
+                        players=team_players,
+                        selected_players=selected_players,
+                        assignments=assignments,
+                        selected_official_ids=selected_official_ids,
+                        preview_assignments=preview_assignments,
+                        randomize=randomize,
+                        exclude_ids=exclude_ids,
+                        selected_player_ids=selected_ids,
+                    )
+
+                if action == "manual":
+                    off_ice_ids = [int(value) for value in request.form.getlist("off_ice") if value]
+                    cafe_ids = [int(value) for value in request.form.getlist("cafe") if value]
+                    scheduler.override_assignments(
+                        event_id,
+                        off_ice_player_ids=off_ice_ids,
+                        cafe_player_ids=cafe_ids,
+                    )
+                    return redirect(url_for("event_page", event_id=event_id))
+            except ValueError as exc:
+                flash(str(exc))
+                return redirect(url_for("event_page", event_id=event_id))
+
         return render_template(
             "event.html",
             event=event,
@@ -188,6 +237,10 @@ def create_app(db_path: str | None = None) -> Flask:
             selected_players=selected_players,
             assignments=assignments,
             selected_official_ids=selected_official_ids,
+            preview_assignments=preview_assignments,
+            randomize=randomize,
+            exclude_ids=exclude_ids,
+            selected_player_ids=[int(player["player_id"]) for player in selected_players],
         )
 
     @app.get("/history")

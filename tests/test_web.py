@@ -47,6 +47,66 @@ def test_event_page_handles_invalid_assignment_request() -> None:
     assert response.headers["Location"] == f"/events/{event_id}"
 
 
+def test_event_assignment_preview_does_not_persist_to_database() -> None:
+    app = create_app(db_path=":memory:")
+    client = app.test_client()
+    scheduler = app.config["SCHEDULER"]
+
+    team_id = scheduler.create_team("U12")
+    player_ids = [scheduler.add_player(team_id, f"Player {idx}") for idx in range(1, 8)]
+    event_id = scheduler.create_event(team_id, "Match 1")
+    scheduler.select_players_for_event(event_id, player_ids)
+
+    response = client.post(
+        f"/events/{event_id}",
+        data={
+            "action": "assign",
+            "player_ids": [str(player_id) for player_id in player_ids],
+            "exclude_ids": [str(player_ids[0])],
+        },
+    )
+
+    assert response.status_code == 200
+    assert scheduler.connection.execute(
+        "SELECT COUNT(*) FROM assignments WHERE event_id = ?",
+        (event_id,),
+    ).fetchone()[0] == 0
+
+
+def test_event_assignment_confirm_persists_preview() -> None:
+    app = create_app(db_path=":memory:")
+    client = app.test_client()
+    scheduler = app.config["SCHEDULER"]
+
+    team_id = scheduler.create_team("U12")
+    player_ids = [scheduler.add_player(team_id, f"Player {idx}") for idx in range(1, 8)]
+    event_id = scheduler.create_event(team_id, "Match 1")
+    scheduler.select_players_for_event(event_id, player_ids)
+
+    client.post(
+        f"/events/{event_id}",
+        data={
+            "action": "assign",
+            "player_ids": [str(player_id) for player_id in player_ids],
+            "exclude_ids": [str(player_ids[0])],
+        },
+    )
+    response = client.post(
+        f"/events/{event_id}",
+        data={
+            "action": "confirm",
+            "player_ids": [str(player_id) for player_id in player_ids],
+            "exclude_ids": [str(player_ids[0])],
+        },
+    )
+
+    assert response.status_code == 302
+    assert scheduler.connection.execute(
+        "SELECT COUNT(*) FROM assignments WHERE event_id = ?",
+        (event_id,),
+    ).fetchone()[0] > 0
+
+
 def test_player_form_accepts_ovr_flag() -> None:
     app = create_app(db_path=":memory:")
     client = app.test_client()

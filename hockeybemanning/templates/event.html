@@ -3,6 +3,16 @@
 {% block content %}
   <h1>{{ event.name }}</h1>
 
+  {% if preview_assignments %}
+    <div class="draft-banner" style="padding: 0.75rem 1rem; margin: 0.5rem 0 1rem; border: 1px solid #d0b26e; background: #fff7df; color: #5a4307; border-radius: 6px; font-weight: 600;">
+      Draft assignment — not saved yet
+    </div>
+  {% elif selected_players %}
+    <div class="saved-banner" style="padding: 0.75rem 1rem; margin: 0.5rem 0 1rem; border: 1px solid #6aa777; background: #edf9ee; color: #1f5d2b; border-radius: 6px; font-weight: 600;">
+      Assignment saved
+    </div>
+  {% endif %}
+
   <p><a href="{{ url_for('team_page', team_id=event.team_id) }}">Back to team</a></p>
 
   <form method="post" class="selection-form">
@@ -11,33 +21,61 @@
       {% for player in players %}
         <div class="selection-row player-option">
           <label class="selection-label">
-            <input type="checkbox" name="player_ids" value="{{ player.player_id }}" {% if player.player_id in selected_players | map(attribute='player_id') %}checked{% endif %} />
+            <input type="checkbox" name="player_ids" value="{{ player.player_id }}" {% if player.player_id in selected_player_ids %}checked{% endif %} />
             <span>{{ player.name }}{% if player.ovr %} (OVR){% endif %}{% if player.cafe %} (Café){% endif %}</span>
           </label>
           <label class="selection-label official-option">
             <input type="checkbox" name="official_ids" value="{{ player.player_id }}" {% if player.player_id in selected_official_ids %}checked{% endif %} />
             <span>Official</span>
           </label>
+          <label class="selection-label exclude-option">
+            <input type="checkbox" name="exclude_ids" value="{{ player.player_id }}" {% if player.player_id in exclude_ids %}checked{% endif %} />
+            <span>Exclude</span>
+          </label>
         </div>
       {% endfor %}
     </fieldset>
 
-    {% if selected_players %}
-      <h2>Assignments</h2>
+    <label>
+      <input type="checkbox" name="randomize" {% if randomize %}checked{% endif %} />
+      Try a different fair mix
+    </label>
+
+    {% if preview_assignments %}
+      <h2>Draft assignments</h2>
       <div>
-        <h3>Sekretariat</h3>
-        {% for assignment in assignments['off_ice'] %}
+        <h3>Off-ice</h3>
+        {% for assignment in preview_assignments['off_ice'] %}
           <div>{{ assignment.player_name }} {% if assignment.is_manual %}(manual){% endif %}</div>
         {% else %}
-          <div>Inga sekretariatuppdrag.</div>
+          <div>No off-ice assignments.</div>
         {% endfor %}
       </div>
       <div>
-        <h3>Kiosk</h3>
+        <h3>Café</h3>
+        {% for assignment in preview_assignments['cafe'] %}
+          <div>{{ assignment.player_name }} {% if assignment.is_manual %}(manual){% endif %}</div>
+        {% else %}
+          <div>No café assignments.</div>
+        {% endfor %}
+      </div>
+      <button type="submit" name="action" value="confirm">Confirm assignment</button>
+    {% elif selected_players %}
+      <h2>Assignments</h2>
+      <div>
+        <h3>Off-ice</h3>
+        {% for assignment in assignments['off_ice'] %}
+          <div>{{ assignment.player_name }} {% if assignment.is_manual %}(manual){% endif %}</div>
+        {% else %}
+          <div>No off-ice assignments.</div>
+        {% endfor %}
+      </div>
+      <div>
+        <h3>Café</h3>
         {% for assignment in assignments['cafe'] %}
           <div>{{ assignment.player_name }} {% if assignment.is_manual %}(manual){% endif %}</div>
         {% else %}
-          <div>Inga kioskuppdrag.</div>
+          <div>No café assignments.</div>
         {% endfor %}
       </div>
     {% endif %}

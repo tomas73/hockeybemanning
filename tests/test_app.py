@@ -169,6 +169,19 @@ class HockeySchedulingAppTests(unittest.TestCase):
         }
         self.assertNotIn(player_ids[0], assigned_player_ids)
 
+    def test_unconfirmed_events_do_not_count_toward_not_selected_totals(self) -> None:
+        team_id = self.app.create_team("U12 Unconfirmed")
+        player_ids = [self.app.add_player(team_id, f"Player {idx}") for idx in range(1, 4)]
+        for player_id in player_ids:
+            self.app.assign_player_to_team(team_id, player_id)
+
+        event_id = self.app.create_event(team_id, "Draft event")
+        self.app.select_players_for_event(event_id, player_ids)
+
+        stats = {stat["player_id"]: stat for stat in self.app.team_player_stats(team_id)}
+        for player_id in player_ids:
+            self.assertEqual(0, stats[player_id]["not_selected_count"])
+
 
 if __name__ == "__main__":
     unittest.main()
